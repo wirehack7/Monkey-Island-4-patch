@@ -1,0 +1,30 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+      - run: .\build.bat
+      - run: .\build\test.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dinput
+          path: build/dinput.dll
+      - if: startsWith(github.ref, 'refs/tags/v')
+        run: gh release create $env:GITHUB_REF_NAME build/dinput.dll --title $env:GITHUB_REF_NAME --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
