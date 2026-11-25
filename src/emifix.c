@@ -191,7 +191,7 @@ static void writeBmp(const char *path, const unsigned char *px, int w, int h)
     BITMAPFILEHEADER fh = { 0x4D42 };
     BITMAPINFOHEADER ih = { sizeof ih, w, h, 1, 32, BI_RGB };
     FILE *f = fopen(path, "wb");
-    if (!f) return;
+    if (!f) { logmsg("cannot write %s", path); return; }
     fh.bfOffBits = sizeof fh + sizeof ih;
     fh.bfSize = fh.bfOffBits + w * h * 4;
     fwrite(&fh, sizeof fh, 1, f);
@@ -212,6 +212,8 @@ static void dump(const char *tag, int w, int h)
     free(px);
 }
 
+static int gameLogged, movieLogged;
+
 static void present(HDC dc, const char *tag)
 {
     RECT cr;
@@ -220,7 +222,12 @@ static void present(HDC dc, const char *tag)
     GLboolean cm[4], sc;
 
     frameNo++;
-    if (!fbo || wglGetCurrentContext() != fboCtx) { SwapBuffers(dc); return; }
+    if (!fbo || wglGetCurrentContext() != fboCtx) {
+        static int logged;
+        if (!logged++) logmsg("present %s: passthrough, fbo=%u ctx=%p fboCtx=%p", tag, fbo, wglGetCurrentContext(), fboCtx);
+        SwapBuffers(dc);
+        return;
+    }
 
     pBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
     if (dumpDir[0] && frameNo % 30 == 0) dump(tag, fboW, fboH);
@@ -241,6 +248,8 @@ static void present(HDC dc, const char *tag)
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     pBlitFramebuffer(0, 0, fboW, fboH, dx, dy, dx + dw, dy + dh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    if (!strcmp(tag, "game") ? !gameLogged++ : !movieLogged++)
+        logmsg("present %s: wnd %p client %dx%d -> %d,%d %dx%d, glError %x", tag, WindowFromDC(dc), cw, ch, dx, dy, dw, dh, glGetError());
     if (dumpDir[0] && frameNo % 300 == 0) {
         pBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glReadBuffer(GL_BACK);
@@ -270,6 +279,8 @@ static PBinkBufferBlit oBinkBufferBlit;
 
 static int WINAPI hk_BinkCopyToBuffer(void *bnk, void *dest, int pitch, unsigned h, unsigned x, unsigned y, unsigned flags)
 {
+    static int logged;
+    if (!logged++) logmsg("BinkCopyToBuffer flags %x pitch %d h %u", flags, pitch, h);
     // ponytail: only 32-bit surfaces (what EMI uses); others fall back to GDI blit
     if ((flags & 0xF) == 3 || (flags & 0xF) == 4) {
         movieBuf = dest; moviePitch = pitch; movieH = (int)h;
@@ -325,6 +336,8 @@ static void drawMovie(void)
 static void WINAPI hk_BinkBufferBlit(void *buf, void *rects, unsigned n)
 {
     if (!movieBuf || !fbo || wglGetCurrentContext() != fboCtx) {
+        static int logged;
+        if (!logged++) logmsg("BinkBufferBlit GDI fallback: movieBuf=%p fbo=%u ctx=%p fboCtx=%p", movieBuf, fbo, wglGetCurrentContext(), fboCtx);
         oBinkBufferBlit(buf, rects, n);
         return;
     }
@@ -369,6 +382,7 @@ static void install(void)
         logf = fopen(path, "w");
     }
     if (!GetEnvironmentVariableA("EMIFIX_DUMP", dumpDir, sizeof dumpDir)) dumpDir[0] = 0;
+    if (dumpDir[0]) logmsg("dumping frames to %s", dumpDir);
     SetProcessDPIAware();
 
     hookImport("user32.dll", "ChangeDisplaySettingsA", hk_ChangeDisplaySettingsA, NULL);
